@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Bitcoin Network Information</title>
+        <style>
+            body {
+                background-color: #121212;
+                color: #c0c0c0;
+                font-family: "Courier New", Courier, monospace;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                margin: 0;
+                padding: 20px;
+            }
+            #container {
+                text-align: center;
+                margin-top: 20px;
+            }
+            h1,
+            p {
+                color: #ffffff;
+            }
+            .info {
+                color: #4caf50; /* Light green color for visibility */
+                font-size: 1.2em;
+                margin: 10px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="container">
+            <h1>Bitcoin Network Information</h1>
+            <p class="info" id="blockHeight">Current Block Height: loading...</p>
+            <p class="info" id="latestBlock">Latest Block: loading...</p>
+            <p class="info" id="peers">Connected Peers: loading...</p>
+            <p class="info" id="hashRate">Network Hash Rate: loading...</p>
+            <p class="info" id="mempoolTransactions">Mempool Transactions: loading...</p>
+            <p class="info" id="mempoolTotalSize">Mempool Total Size: loading...</p>
+        </div>
+        <script>
+            function fetchData() {
+                fetch("/api/bitcoin-info")
+                    .then((response) => response.json())
+                    .then((data) => {
+                        document.getElementById(
+                            "blockHeight"
+                        ).textContent = `Current Block Height: ${data.blockHeight}`;
+                        document.getElementById(
+                            "latestBlock"
+                        ).textContent = `Latest Block: ${data.latestBlock.hash}`; // Adjust if needed
+                        document.getElementById(
+                            "peers"
+                        ).textContent = `Connected Peers: ${data.peers}`;
+                        document.getElementById(
+                            "hashRate"
+                        ).textContent = `Network Hash Rate: ${data.networkHashRate}`;
+                        document.getElementById(
+                            "mempoolTransactions"
+                        ).textContent = `Mempool Transactions: ${data.mempoolInfo.size}`;
+                        document.getElementById(
+                            "mempoolTotalSize"
+                        ).textContent = `Mempool Total Size: ${data.mempoolInfo.bytes} bytes`;
+                    })
+                    .catch((error) => console.error("Error fetching Bitcoin information:", error));
+            }
+
+            fetchData();
+            setInterval(fetchData, 5000);
+        </script>
+    </body>
+</html>
