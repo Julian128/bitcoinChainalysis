@@ -1,9 +1,8 @@
 from bitcoinrpc.authproxy import AuthServiceProxy
 import time
-import numpy as np
 import configparser
-
-
+import pycoingecko
+import numpy as np
 class Bitcoin():
     def __init__(self):
         self.config = configparser.ConfigParser()
@@ -15,38 +14,55 @@ class Bitcoin():
 
         self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
 
+        self.printInfo()
+
+    def printInfo(self):
+            print("Connecting to Bitcoin Core...\n############################################################")
+            info = self.rpc("getblockchaininfo")
+            print(f"Chain: {info['chain']}")
+            print(f"Block height: {info['blocks']}")
+            print(f"Chainwork: {info['chainwork']}")
+            print(f"Pruned: {info['pruned']}")
+            print(f"Size on disk in GB: {info['size_on_disk'] / 1024**3}")
+            print(f"Block download progress: {info['blocks'] / info['headers']}")
+            # print(f"Verification progress: {info['verificationprogress']}")
+            # print(self.getFeePriorities())
+            print(f"Price: {self.getPrice()}")
+            print("############################################################")
+
+    def rpc(self, method: str, *args):
+        while True:
+            try:
+                return self.rpcConnection.__getattr__(method)(*args)
+            except Exception as e:
+                print(f"Exception in RPC call: {e}")
+                time.sleep(5)
+                self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
+
     def getBlockCount(self):
-        return self.rpcConnection.getblockcount()
+        return self.rpc("getblockcount")
 
     def getBlockFromHeight(self, blockHeight: int):
-        blockHash = self.rpcConnection.getblockhash(blockHeight)
-        return self.rpcConnection.getblock(blockHash, 2)
+        blockHash = self.rpc("getblockhash", blockHeight)
+        block = self.rpc("getblock", blockHash, 2)
+        block["value"] = self.getBlockValue(block)
+        return block
+
+    def getLatestBlock(self):
+        return self.getBlockFromHeight(self.getBlockCount())
 
     def iterateBlocks(self, start=0, stop=0, stepSize=1):
-        i = start
-        stop = stop
-        while i < stop:
-            try:
-                block = self.getBlockFromHeight(i)
-                block["value"] = self.getBlockValue(block)  
-                yield block
-                i += stepSize
-            except Exception as e:
-                print(e)
-                self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
-                time.sleep(10)
+        for i in range(start, stop, stepSize):
+            block = self.getBlockFromHeight(i)
+            block["value"] = self.getBlockValue(block)  
+            yield block
 
     def iterateLatestBlocks(self, nBlocks=100):
         start = self.getBlockCount()
         for i in range(nBlocks):
-            try:
-                block = self.getBlockFromHeight(start-i)
-                block["value"] = self.getBlockValue(block)  
-                yield block
-            except Exception as e:
-                print(e)
-                self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
-                time.sleep(10)
+            block = self.getBlockFromHeight(start-i)
+            block["value"] = self.getBlockValue(block)  
+            yield block
     
     def getBlockValue(self, block):
         return sum([sum(out['value'] for out in tx['vout']) for tx in block['tx'][1:]])
@@ -66,6 +82,13 @@ class Bitcoin():
             for output in tx["vout"]:
                 utxos.append(output)
         return utxos
+    
+    def getInputsFromBlock(self, block):
+        inputs = []
+        for tx in block["tx"]:
+            for input in tx["vin"]:
+                inputs.append(input)
+        return inputs
 
     def findTx(self, value: int, epsilon=0.001):
         height = self.getBlockCount()
@@ -89,36 +112,36 @@ class Bitcoin():
                     except:
                         pass
 
-
     def current_block_height(self):
         blockHeight = self.runCli(f"bitcoin-cli getblockcount")
         return blockHeight
     
-    def getFeePriorities(self, nHighPriority=1000, nMediumPriority=2000, nLowPriority=4000) -> list[int]:
-        mempoolTxIds = self.rpcConnection.getrawmempool()
-        feeRates = []
+    def getFeePriorities(self, nHighPriority=1500, nMediumPriority=2000, nLowPriority=3000) -> list[int]:
+        priorities = []
+        while True:
+            mempoolTxIds = self.rpc("getrawmempool")
+            feeRates = []
 
-        for txid in mempoolTxIds[:nLowPriority+100]:
-            tx = self.rpcConnection.getmempoolentry(txid)
-            try:
+            for txid in mempoolTxIds[:nLowPriority+100]:
+                tx = self.rpc("getmempoolentry", txid)
                 feeRates.append(float(tx["fees"]["base"] / tx["vsize"]) * 1e8)
-            except:
-                pass
         
-        priorities = [int(np.median(feeRates[:nHighPriority])), int(np.median(feeRates[:nMediumPriority])), int(np.median(feeRates[:nLowPriority]))]
+            priorities = [int(np.median(feeRates[:nLowPriority])), int(np.median(feeRates[:nMediumPriority])), int(np.median(feeRates[:nHighPriority]))]
+            return priorities
 
-        # print(f"High priority: {priorities[0]} sats/vbyte")
-        # print(f"Medium priority: {priorities[1]} sats/vbyte")
-        # print(f"Low priority: {priorities[2]} sats/vbyte")
+    def getLeadingZeroesInBinary(self, block):
+        binaryHash = bin(int(block["hash"], 16))[2:].zfill(256)
+        leadingZeros = binaryHash.index("1")
+        return leadingZeros
+    
+    def getPrice(self):
+        coinGecko = pycoingecko.CoinGeckoAPI()
+        btc_data = coinGecko.get_coin_market_chart_by_id('bitcoin', 'usd', '1hour')
+        price = [data[1] for data in btc_data['prices']][-1]
+        inversePrice = 1 / price
 
-        return priorities
+        return int(price), int(inversePrice*1e8)
+
 
 if __name__ == "__main__":
     bitcoin = Bitcoin()
-    print("Connected to Bitcoin Core")
-    print(f"Block height: {bitcoin.getBlockCount()}")
-    print(bitcoin.getFeePriorities())
-
-
-
-
