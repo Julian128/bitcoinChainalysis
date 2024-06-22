@@ -12,7 +12,7 @@ class Bitcoin():
         self.host = self.config['settings']['host']
         self.port = self.config['settings']['port']
 
-        self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
+        self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}", timeout=300)
 
         self.printInfo()
 
@@ -31,7 +31,7 @@ class Bitcoin():
             print("############################################################")
 
     def rpc(self, method: str, *args):
-        while True:
+        for _ in range(3):
             try:
                 return self.rpcConnection.__getattr__(method)(*args)
             except Exception as e:
@@ -123,9 +123,12 @@ class Bitcoin():
             feeRates = []
 
             for txid in mempoolTxIds[:nLowPriority+100]:
-                tx = self.rpc("getmempoolentry", txid)
-                feeRates.append(float(tx["fees"]["base"] / tx["vsize"]) * 1e8)
-        
+                try:
+                    tx = self.rpc("getmempoolentry", txid)
+                    feeRates.append(float(tx["fees"]["base"] / tx["vsize"]) * 1e8)
+                except:
+                    pass
+
             priorities = [int(np.median(feeRates[:nLowPriority])), int(np.median(feeRates[:nMediumPriority])), int(np.median(feeRates[:nHighPriority]))]
             return priorities
 
@@ -136,12 +139,17 @@ class Bitcoin():
     
     def getPrice(self):
         coinGecko = pycoingecko.CoinGeckoAPI()
-        btc_data = coinGecko.get_coin_market_chart_by_id('bitcoin', 'usd', '1hour')
+        btc_data = coinGecko.get_coin_market_chart_by_id('bitcoin', 'usd', '1minute')
         price = [data[1] for data in btc_data['prices']][-1]
         inversePrice = 1 / price
 
         return int(price), int(inversePrice*1e8)
 
+    def getSupply(self):
+        return self.rpc("gettxoutsetinfo")["total_amount"]
+
 
 if __name__ == "__main__":
     bitcoin = Bitcoin()
+    # print(bitcoin.getSupply())
+    bitcoin.getBlockFromHeight(848800)

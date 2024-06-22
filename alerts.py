@@ -22,7 +22,7 @@ class BaseAlert:
             self.sendMessage(message)
             self.lastAlertTime = datetime.now()
 
-        time.sleep(10)
+        time.sleep(5)
 
     def sendMessage(self, message):
 
@@ -36,36 +36,18 @@ class BaseAlert:
 
 bitcoin = Bitcoin()
 
-class LowFeesAlert(BaseAlert):
+class FeeAlert(BaseAlert):
     def __init__(self, cooldownPeriod, threshold=20):
         super().__init__(cooldownPeriod)
         self.threshold = threshold
 
     def checkAndAlert(self):
+        print("LowFeesAlert")
         priorities = bitcoin.getFeePriorities()
         if priorities[0] <= self.threshold:
             self.sendAlert(f"#Bitcoin fee rate is low:\nPriorities: {priorities[0]}, {priorities[1]}, {priorities[2]}")
-
-class HighFeesAlert(BaseAlert):
-    def __init__(self, cooldownPeriod, threshold=200):
-        super().__init__(cooldownPeriod)
-        self.threshold = threshold
-
-    def checkAndAlert(self):
-        priorities = bitcoin.getFeePriorities()
         if priorities[0] >= self.threshold:
             self.sendAlert(f"#Bitcoin feerate is high\n Priorities: {priorities[0]}, {priorities[1]}, {priorities[2]}")
-
-class WhaleAlert(BaseAlert):
-    def __init__(self, cooldownPeriod, threshold=10_000):
-        super().__init__(cooldownPeriod)
-        self.threshold = threshold
-
-    def checkAndAlert(self):
-        utxoValues = bitcoin.getBlockUtxoValues(bitcoin.getLatestBlock())
-        largestUtxo = max(utxoValues)
-        if largestUtxo >= self.threshold:
-            self.sendAlert(f"#Bitcoin whale alert:\n{(largestUtxo):.2f} BTC UTXO found in the latest block")        
 
 class SatsPerUsdAlert(BaseAlert):
     def __init__(self, cooldownPeriod, threshold=25):
@@ -82,18 +64,6 @@ class SatsPerUsdAlert(BaseAlert):
             self.lastPrice = round(satsPerUsd, -1)
             self.sendAlert(f"#Bitcoin price update:\nSats per USD: {self.lastPrice}")
 
-class DifficultyAdjustmentAlert(BaseAlert):
-    def __init__(self, cooldownPeriod):
-        super().__init__(cooldownPeriod)
-
-    def checkAndAlert(self):
-        height = bitcoin.getBlockCount()
-        if height % 2016 == 0:
-            difficulty = bitcoin.getBlockFromHeight(height)["difficulty"]
-            lastBlockDifficulty = bitcoin.getBlockFromHeight(height-1)["difficulty"]
-            percentalChange = round((difficulty/lastBlockDifficulty - 1) * 100, 2)
-            self.sendAlert(f"#Bitcoin difficulty adjusted: {percentalChange}%")
-
 class NewBlockAlert(BaseAlert):
     def __init__(self, cooldownPeriod):
         super().__init__(cooldownPeriod)
@@ -103,26 +73,36 @@ class NewBlockAlert(BaseAlert):
         if self.blockHeight == 0:
             self.blockHeight = bitcoin.getBlockCount()
             return
+        
         height = bitcoin.getBlockCount()
         if height > self.blockHeight:
             self.blockHeight = height
-            if height % 100 == 0:
-                block = bitcoin.getBlockFromHeight(height)
-                self.sendAlert(f"#Bitcoin block #{height} was mined:\nTotal block value: {int(block['value'])} BTC")
+            block = bitcoin.getBlockFromHeight(height)
+
+            # difficulty adjustment
+            if height % 2016 == 0:
+                difficulty = block["difficulty"]
+                lastBlockDifficulty = bitcoin.getBlockFromHeight(height-1)["difficulty"]
+                percentalChange = round((difficulty/lastBlockDifficulty - 1) * 100, 2)
+                self.sendAlert(f"#Bitcoin difficulty adjusted: {percentalChange}%")
+
+            # whale alert
+            utxoValues = bitcoin.getBlockUtxoValues(block)
+            largestUtxo = max(utxoValues)
+            if largestUtxo >= self.threshold:
+                self.sendAlert(f"#Bitcoin whale alert:\n{(largestUtxo):.2f} BTC UTXO found in the latest block")        
+
+            # empty block alert
+            if len(block["tx"]) == 1:
+                self.sendAlert(f"#Bitcoin empty block mined:\nBlock height: {height}")
 
 
-lowFeesAlert = LowFeesAlert(3600*10)
-highFeesAlert = HighFeesAlert(3600*10)
-whaleAlert = WhaleAlert(3600)
+feeAlert = FeeAlert(3600*24)
 satsPerUsdAlert = SatsPerUsdAlert(60)
-difficultyAdjustmentAlert = DifficultyAdjustmentAlert(3600)
 newBlockAlert = NewBlockAlert(60)
 
 while True:
     newBlockAlert.checkAndAlert()
-    lowFeesAlert.checkAndAlert()
-    highFeesAlert.checkAndAlert()
-    whaleAlert.checkAndAlert()
+    feeAlert.checkAndAlert()
     satsPerUsdAlert.checkAndAlert()
-    difficultyAdjustmentAlert.checkAndAlert()
     time.sleep(60)
