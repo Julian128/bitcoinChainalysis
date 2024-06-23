@@ -3,6 +3,7 @@ import time
 import configparser
 import pycoingecko
 import numpy as np
+import tqdm
 
 from bitcoinData import BitcoinData
 from block import Block
@@ -23,10 +24,8 @@ class Bitcoin():
         self.data = BitcoinData()
 
     def initData(self):
-        blockHeight = self.getBlockCount()
-        startHeight =  blockHeight - self.data.lastBlocks.maxlen
-        for block in self.iterateBlocks(startHeight):
-            self.data.update(block)
+        for block in tqdm.tqdm(self.iterateBlocks(self.getBlockCount() - self.data.lastBlocks.maxlen), desc="Initializing data", total=self.data.lastBlocks.maxlen):
+            self.data.lastBlocks.append(block)
 
     def updateData(self):
         if self.getBlockCount() > self.data.blockHeight:
