@@ -5,7 +5,7 @@ from bitcoin import Bitcoin
 from scripts.tweeter import tweet, sendImessage
 
 
-SEND_IMSG = False
+SEND_IMSG = True
 SEND_TWEET = False
 PRINT_CONSOLE = True
 
@@ -32,9 +32,8 @@ class BaseAlert:
 
         if SEND_TWEET: tweet(message)
 
-        if PRINT_CONSOLE: print(f"############################################################\n{message}\n############################################################\n")
+        if PRINT_CONSOLE: print(f"{message}\n")
 
-bitcoin = Bitcoin()
 
 class FeeAlert(BaseAlert):
     def __init__(self, cooldownPeriod, threshold=20):
@@ -42,14 +41,13 @@ class FeeAlert(BaseAlert):
         self.threshold = threshold
 
     def checkAndAlert(self):
-        print("LowFeesAlert")
         priorities = bitcoin.getFeePriorities()
         if priorities[0] <= self.threshold:
             self.sendAlert(f"#Bitcoin fee rate is low:\nPriorities: {priorities[0]}, {priorities[1]}, {priorities[2]}")
         if priorities[0] >= self.threshold:
             self.sendAlert(f"#Bitcoin feerate is high\n Priorities: {priorities[0]}, {priorities[1]}, {priorities[2]}")
 
-class SatsPerUsdAlert(BaseAlert):
+class PriceAlert(BaseAlert):
     def __init__(self, cooldownPeriod, threshold=25):
         super().__init__(cooldownPeriod)
         self.threshold = threshold
@@ -67,42 +65,23 @@ class SatsPerUsdAlert(BaseAlert):
 class NewBlockAlert(BaseAlert):
     def __init__(self, cooldownPeriod):
         super().__init__(cooldownPeriod)
-        self.blockHeight = 0
 
     def checkAndAlert(self):
-        if self.blockHeight == 0:
-            self.blockHeight = bitcoin.getBlockCount()
-            return
-        
-        height = bitcoin.getBlockCount()
-        if height > self.blockHeight:
-            self.blockHeight = height
-            block = bitcoin.getBlockFromHeight(height)
-
-            # difficulty adjustment
-            if height % 2016 == 0:
-                difficulty = block["difficulty"]
-                lastBlockDifficulty = bitcoin.getBlockFromHeight(height-1)["difficulty"]
-                percentalChange = round((difficulty/lastBlockDifficulty - 1) * 100, 2)
-                self.sendAlert(f"#Bitcoin difficulty adjusted: {percentalChange}%")
-
-            # whale alert
-            utxoValues = bitcoin.getBlockUtxoValues(block)
-            largestUtxo = max(utxoValues)
-            if largestUtxo >= self.threshold:
-                self.sendAlert(f"#Bitcoin whale alert:\n{(largestUtxo):.2f} BTC UTXO found in the latest block")        
-
-            # empty block alert
-            if len(block["tx"]) == 1:
-                self.sendAlert(f"#Bitcoin empty block mined:\nBlock height: {height}")
-
+        bitcoin.updateData()
+        message = bitcoin.getNewBlockMessage()
+        if message:
+            self.sendAlert(message)
 
 feeAlert = FeeAlert(3600*24)
-satsPerUsdAlert = SatsPerUsdAlert(60)
+priceAlert = PriceAlert(60)
 newBlockAlert = NewBlockAlert(60)
 
+
+bitcoin = Bitcoin()
+bitcoin.initData()
+
 while True:
-    newBlockAlert.checkAndAlert()
     feeAlert.checkAndAlert()
-    satsPerUsdAlert.checkAndAlert()
+    priceAlert.checkAndAlert()
+    newBlockAlert.checkAndAlert()
     time.sleep(60)

@@ -3,6 +3,11 @@ import time
 import configparser
 import pycoingecko
 import numpy as np
+
+from bitcoinData import BitcoinData
+from block import Block
+
+
 class Bitcoin():
     def __init__(self):
         self.config = configparser.ConfigParser()
@@ -12,9 +17,25 @@ class Bitcoin():
         self.host = self.config['settings']['host']
         self.port = self.config['settings']['port']
 
-        self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}", timeout=300)
+        self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}", timeout=30)
 
         self.printInfo()
+        self.data = BitcoinData()
+
+    def initData(self):
+        blockHeight = self.getBlockCount()
+        startHeight =  blockHeight - self.data.lastBlocks.maxlen
+        for block in self.iterateBlocks(startHeight):
+            self.data.update(block)
+
+    def updateData(self):
+        if self.getBlockCount() > self.data.blockHeight:
+            self.data.update(self.getLatestBlock())
+
+    def getNewBlockMessage(self):
+        message = self.data.message
+        self.data.resetMessage()
+        return message
 
     def printInfo(self):
             print("Connecting to Bitcoin Core...\n############################################################")
@@ -35,6 +56,8 @@ class Bitcoin():
             try:
                 return self.rpcConnection.__getattr__(method)(*args)
             except Exception as e:
+                if str(e).startswith("-5"):
+                    return
                 print(f"Exception in RPC call: {e}")
                 time.sleep(5)
                 self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
@@ -42,19 +65,20 @@ class Bitcoin():
     def getBlockCount(self):
         return self.rpc("getblockcount")
 
-    def getBlockFromHeight(self, blockHeight: int):
+    def getBlockFromHeight(self, blockHeight: int) -> Block:
         blockHash = self.rpc("getblockhash", blockHeight)
         block = self.rpc("getblock", blockHash, 2)
-        block["value"] = self.getBlockValue(block)
+        block = Block(block, self.getBlockValue(block), self.getFeePriorities())
         return block
 
     def getLatestBlock(self):
         return self.getBlockFromHeight(self.getBlockCount())
 
     def iterateBlocks(self, start=0, stop=0, stepSize=1):
+        if stop == 0:
+            stop = self.getBlockCount()
         for i in range(start, stop, stepSize):
             block = self.getBlockFromHeight(i)
-            block["value"] = self.getBlockValue(block)  
             yield block
 
     def iterateLatestBlocks(self, nBlocks=100):
@@ -146,10 +170,30 @@ class Bitcoin():
         return int(price), int(inversePrice*1e8)
 
     def getSupply(self):
-        return self.rpc("gettxoutsetinfo")["total_amount"]
+        # TODO: replace with RPC call to get supply from UTXO set
+        subsidy = 5_000_000_000 # 50 BTC
+        subsidyInterval = 210000
+        totalSupply = 0
+        blockHeight = 1
+
+        for _ in range(self.getBlockCount()):
+            totalSupply += subsidy
+            blockHeight += 1
+            if blockHeight % subsidyInterval == 0:
+                subsidy = subsidy >> 1
+
+        return round(totalSupply / 1e8 / 21e4, 2)
+
+    
+    def getBlockFees(self, block):
+        fees = 0
+        for tx in block["tx"]:
+            fees += sum([input["value"] for input in tx["vin"]]) - sum([output["value"] for output in tx["vout"]])
+        return fees
+
+    def getTransaction(self, txid):
+        return self.rpc("gettransaction", txid)
 
 
 if __name__ == "__main__":
     bitcoin = Bitcoin()
-    # print(bitcoin.getSupply())
-    bitcoin.getBlockFromHeight(848800)

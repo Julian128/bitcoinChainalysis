@@ -3,3 +3,4 @@ data
 plotdata
 plots
 blocksLight
+__pycache__
