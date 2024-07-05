@@ -4,9 +4,13 @@ import configparser
 import pycoingecko
 import numpy as np
 import tqdm
+import pickle
+import os
 
 from bitcoinData import BitcoinData
 from block import Block
+from scripts.tweeter import Tweet
+from plots import utxoValuePlot
 
 
 class Bitcoin():
@@ -24,12 +28,30 @@ class Bitcoin():
         self.data = BitcoinData()
 
     def initData(self):
-        for block in tqdm.tqdm(self.iterateBlocks(self.getBlockCount() - self.data.lastBlocks.maxlen), desc="Initializing data", total=self.data.lastBlocks.maxlen):
-            self.data.lastBlocks.append(block)
+        if (os.path.exists("data/lastBlocks.pkl")):
+            self.data.lastBlocks = pickle.load(open("data/lastBlocks.pkl", "rb"))
+            self.data.lastBlocks.pop()
+            self.data.blockHeight = self.data.lastBlocks[-1].height
 
-    def updateData(self):
-        if self.getBlockCount() > self.data.blockHeight:
-            self.data.update(self.getLatestBlock())
+        currentHeight = self.getBlockCount()
+
+        if (currentHeight - self.data.blockHeight) > self.data.lastBlocks.maxlen:
+            self.data.lastBlocks.clear()
+            self.data.blockHeight = currentHeight - self.data.lastBlocks.maxlen
+
+        if currentHeight > self.data.blockHeight:
+            for block in tqdm.tqdm(self.iterateBlocks(self.data.blockHeight+1, currentHeight), desc="Initializing data", total=currentHeight - self.data.blockHeight - 1):
+                self.data.update(block, initial=True)
+
+    def updateData(self) -> list[Tweet]:
+        blockHeight = self.getBlockCount()
+        messages = []
+        if blockHeight > self.data.blockHeight:
+            blocksToUpdate = range(self.data.blockHeight + 1, blockHeight + 1)
+            for height in blocksToUpdate:
+                messages.extend(self.data.update(self.getBlockFromHeight(height)))
+
+        return messages
 
     def getNewBlockMessage(self):
         message = self.data.message
@@ -58,7 +80,7 @@ class Bitcoin():
                 if str(e).startswith("-5"):
                     return
                 print(f"Exception in RPC call: {e}")
-                time.sleep(5)
+                time.sleep(2)
                 self.rpcConnection = AuthServiceProxy(f"http://{self.user}:{self.password}@{self.host}:{self.port}")
 
     def getBlockCount(self):
@@ -67,8 +89,11 @@ class Bitcoin():
     def getBlockFromHeight(self, blockHeight: int) -> Block:
         blockHash = self.rpc("getblockhash", blockHeight)
         block = self.rpc("getblock", blockHash, 2)
-        block = Block(block, self.getBlockValue(block), self.getFeePriorities())
-        return block
+        if block:
+            block = Block(block, self.getBlockValue(block), self.getBlockUtxoValues(block), self.getPrice(), self.getFeePriorities())
+            return block
+
+        raise("Block not found")
 
     def getLatestBlock(self):
         return self.getBlockFromHeight(self.getBlockCount())
@@ -84,20 +109,19 @@ class Bitcoin():
         start = self.getBlockCount()
         for i in range(nBlocks):
             block = self.getBlockFromHeight(start-i)
-            block["value"] = self.getBlockValue(block)  
             yield block
     
-    def getBlockValue(self, block):
+    def getBlockValue(self, block: Block):
         return sum([sum(out['value'] for out in tx['vout']) for tx in block['tx'][1:]])
 
-    def getBlockUtxoValues(self, block):
+    def getBlockUtxoValues(self, block) -> list[int]:
         utxoValues = []
         for tx in block["tx"]:
             if len(tx["vout"]) > 2:
                 continue
             for output in tx["vout"]:
-                utxoValues.append(output["value"])
-        return np.array(utxoValues)
+                utxoValues.append(float(output["value"]))
+        return utxoValues
     
     def getUtxosFromBlock(self, block):
         utxos = []
@@ -113,7 +137,7 @@ class Bitcoin():
                 inputs.append(input)
         return inputs
 
-    def findTx(self, value: int, epsilon=0.001):
+    def findTxByValue(self, value: int, epsilon=0.001):
         height = self.getBlockCount()
         for block in bitcoin.iterateBlocks(height, height-100, -1):
             for tx in block["tx"]:
@@ -121,25 +145,7 @@ class Bitcoin():
                     if value - epsilon < output["value"] < value + epsilon:
                         return output
                     
-    def findUtxoOfAddress(self, address: str):
-        txs = []
-        height = self.getBlockCount()
-        for block in bitcoin.iterateBlocks(height, height-100, -1):
-            for tx in block["tx"]:
-                for output in tx["vout"]:
-                    try:
-                        if address == output["scriptPubKey"]["address"]:
-                            txs.append(tx)
-                            print(txs)
-                            input()
-                    except:
-                        pass
-
-    def current_block_height(self):
-        blockHeight = self.runCli(f"bitcoin-cli getblockcount")
-        return blockHeight
-    
-    def getFeePriorities(self, nHighPriority=1500, nMediumPriority=2000, nLowPriority=3000) -> list[int]:
+    def getFeePriorities(self, nHighPriority=1250, nMediumPriority=1750, nLowPriority=2500) -> tuple[int]:
         priorities = []
         while True:
             mempoolTxIds = self.rpc("getrawmempool")
@@ -152,7 +158,7 @@ class Bitcoin():
                 except:
                     pass
 
-            priorities = [int(np.median(feeRates[:nLowPriority])), int(np.median(feeRates[:nMediumPriority])), int(np.median(feeRates[:nHighPriority]))]
+            priorities = tuple([int(np.median(feeRates[:nLowPriority])), int(np.median(feeRates[:nMediumPriority])), int(np.median(feeRates[:nHighPriority]))])
             return priorities
 
     def getLeadingZeroesInBinary(self, block):
@@ -160,7 +166,7 @@ class Bitcoin():
         leadingZeros = binaryHash.index("1")
         return leadingZeros
     
-    def getPrice(self):
+    def getPrice(self) -> tuple[int, int]:
         coinGecko = pycoingecko.CoinGeckoAPI()
         btc_data = coinGecko.get_coin_market_chart_by_id('bitcoin', 'usd', '1minute')
         price = [data[1] for data in btc_data['prices']][-1]
@@ -168,22 +174,6 @@ class Bitcoin():
 
         return int(price), int(inversePrice*1e8)
 
-    def getSupply(self):
-        # TODO: replace with RPC call to get supply from UTXO set
-        subsidy = 5_000_000_000 # 50 BTC
-        subsidyInterval = 210000
-        totalSupply = 0
-        blockHeight = 1
-
-        for _ in range(self.getBlockCount()):
-            totalSupply += subsidy
-            blockHeight += 1
-            if blockHeight % subsidyInterval == 0:
-                subsidy = subsidy >> 1
-
-        return round(totalSupply / 1e8 / 21e4, 2)
-
-    
     def getBlockFees(self, block):
         fees = 0
         for tx in block["tx"]:
@@ -196,3 +186,5 @@ class Bitcoin():
 
 if __name__ == "__main__":
     bitcoin = Bitcoin()
+
+
